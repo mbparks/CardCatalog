@@ -18,6 +18,7 @@ Part of the Field Instruments series at [mbparks.com](https://mbparks.com).
 | `cardcatalog-core.js` | Pure logic module (seeded rendering, accessions, subject filing, circulation date math, export envelope). Shared by the app and the test harness. |
 | `tests.html` | Browser-runnable test harness. All tests must pass before any release. |
 | `SPEC.md` | Full specification document, revision 1. |
+| `prototypes/riffle.html` | Riffle interaction prototype with DOM virtualization and FPS instrumentation. Open in a browser and drag. |
 | `releases/` | Each release saved as its own file. |
 | `LICENSE` | GPL-3.0 full text. |
 
@@ -46,7 +47,7 @@ Local-first. The full catalog exports to a single JSON file you own. External de
 - Import is a stub; the storage layer (IndexedDB vs. localStorage decision pending) arrives in v0.2.
 - Typewriter and pencil typefaces currently fall back to system stacks. Font subsetting and embedding is planned for v1.0.
 - No sounds are implemented yet; the mute control ships ahead of the audio it governs.
-- The riffle-browse interaction, identified in the spec as the number one performance risk, has not been prototyped. It should be the first v0.2 task.
+- The riffle-browse interaction, identified in the spec as the number one performance risk, now has a prototype at `prototypes/riffle.html` with built-in FPS, 1% low, and long-frame counters. It virtualizes to a fixed pool of 19 DOM nodes regardless of drawer size (tested up to 20,000 synthetic cards). Verify the numbers on your own hardware, especially a phone, before the technique is promoted into the shell.
 - The feedback link points at the GitHub issues page; an in-app feedback mechanism is required before v1.0.
 
 ## License

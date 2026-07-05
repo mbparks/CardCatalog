@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<!-- CARD CATALOG (FI-066) riffle prototype. Retires spec risk #1: drawer riffle performance at scale. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CARD CATALOG · Riffle Prototype</title>
+<style>
+/* Prototype only. Night palette borrowed from the shell; not themed. */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  background: #14100c;
+  background-image: radial-gradient(ellipse 70% 55% at 50% 18%, rgba(72,129,96,0.16), transparent 70%);
+  color: #e9e2d2;
+  font-family: "Courier New", Courier, monospace;
+  display: flex; flex-direction: column; align-items: center;
+  user-select: none; touch-action: none;
+}
+header { text-align: center; padding: 0.8rem 1rem 0.2rem; }
+header h1 { font-size: 0.85rem; letter-spacing: 0.3em; margin: 0; }
+header p { font-size: 0.7rem; color: #b0a790; margin: 0.3rem 0 0; }
+
+/* Instrumentation strip */
+#hud {
+  display: flex; gap: 1.2rem; flex-wrap: wrap; justify-content: center;
+  font-size: 0.7rem; padding: 0.5rem; color: #b0a790;
+}
+#hud b { color: #79b894; font-weight: 700; }
+#hud b.bad { color: #e06c6c; }
+#hud select, #hud button {
+  background: #1d1712; color: #e9e2d2; border: 1px solid #33291d;
+  font-family: inherit; font-size: 0.7rem; padding: 0.15rem 0.4rem; cursor: pointer;
+}
+
+/* The drawer */
+#drawer {
+  position: relative;
+  width: min(26rem, 92vw);
+  flex: 1;
+  max-height: 70vh;
+  perspective: 900px;
+  perspective-origin: 50% 20%;
+  margin-bottom: 1rem;
+  cursor: grab;
+}
+#drawer.grabbing { cursor: grabbing; }
+#drawer .walls {
+  position: absolute; inset: auto 0 0 0; height: 88%;
+  background: linear-gradient(160deg, #7d5732, #543a20);
+  border: 3px solid #3a2814;
+  border-radius: 4px;
+  box-shadow: 0 1.5rem 3rem rgba(0,0,0,0.45);
+}
+#drawer .rod {
+  position: absolute; left: 12%; right: 12%; bottom: 8%;
+  height: 5px; background: linear-gradient(180deg, #d9bc85, #b8945a);
+  border-radius: 3px; z-index: 40;
+}
+
+/* Card pool. Every card is transform-only; layout never changes. */
+.card {
+  position: absolute;
+  left: 50%; bottom: 14%;
+  width: 78%;
+  aspect-ratio: 5 / 3;
+  margin-left: -39%;
+  background: #f2ead8;
+  color: #241c12;
+  border: 1px solid #c9bda0;
+  border-radius: 2px;
+  transform-origin: 50% 100%;
+  will-change: transform;
+  backface-visibility: hidden;
+  padding: 4% 5%;
+  font-size: clamp(0.5rem, 1.9vw, 0.72rem);
+  line-height: 1.5;
+}
+.card .call { position: absolute; top: 4%; left: 5%; font-weight: 700; }
+.card .body { margin-top: 12%; }
+.card .author { font-weight: 700; }
+.card .hole {
+  position: absolute; bottom: 5%; left: 50%; width: 8%; aspect-ratio: 1;
+  margin-left: -4%; border-radius: 50%;
+  background: #543a20; box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+}
+.card .accession { position: absolute; top: 4%; right: 5%; color: #8a7d63; font-size: 0.85em; }
+
+footer { font-size: 0.65rem; color: #b0a790; padding-bottom: 0.6rem; text-align: center; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>RIFFLE PROTOTYPE</h1>
+  <p>Drag up and down, use the mouse wheel, or press auto-riffle. Cards settle upright on release.</p>
+</header>
+
+<div id="hud">
+  <span>fps <b id="fps">--</b></span>
+  <span>1% low <b id="fpsLow">--</b></span>
+  <span>long frames <b id="jank">0</b></span>
+  <span>card <b id="posOut">1</b> / <span id="totalOut"></span></span>
+  <span>live nodes <b id="nodesOut">0</b></span>
+  <label>drawer size
+    <select id="countSel">
+      <option value="100">100</option>
+      <option value="1000" selected>1,000</option>
+      <option value="5000">5,000</option>
+      <option value="20000">20,000</option>
+    </select>
+  </label>
+  <button id="autoBtn">Auto-riffle</button>
+  <button id="resetBtn">Reset stats</button>
+</div>
+
+<div id="drawer" aria-label="Riffle drawer prototype">
+  <div class="walls"></div>
+  <div class="rod"></div>
+</div>
+
+<footer>FI-066 prototype · retires spec risk #1 · target: 60fps at 1,000+ cards</footer>
+
+<script src="../cardcatalog-core.js"></script>
+<script>
+(function () {
+  "use strict";
+  const CC = window.CardCatalog;
+
+  /* ----------------------------------------------------------------
+   * Synthetic catalog. Deterministic via the core seeded PRNG so
+   * every run riffles the same cards.
+   * ---------------------------------------------------------------- */
+  const SURNAMES = ["Krenov","Latrobe","Thoreau","Whitman","Cather","Roebling","Tesla","Audubon","Muir","Olmsted","Peale","Fulton","Hollerith","Eastman","Burroughs","Dickinson","Melville","Bartram","Rittenhouse","Saxton"];
+  const GIVEN = ["James","Benjamin","Henry","Walt","Willa","John","Nikola","Mary","Frederick","Charles","Rebecca","Robert","Herman","Emily","David","Samuel","Clara","George","Anna","Thomas"];
+  const TOPICS = ["Cabinetmaking","the B&O Railroad","Canal Navigation","Wireless Telegraphy","Appalachian Botany","Iron Founding","Lens Grinding","the National Road","Steam Power","Letterpress Printing","Surveying","Coal Geology","Timber Framing","Signal Practice","Bookbinding"];
+  const FORMS = ["The Fine Art of %","A Treatise on %","% for the Practical Man","Notes on %","The Principles of %","A Field Guide to %","% and Its Applications","An Introduction to %"];
+  const CLASSES = ["621.3","625.1","684.08","386.4","770.28","674.2","526.9","553.2","091.5","384.5"];
+
+  function makeCatalog(n) {
+    const rng = CC.mulberry32(19660405); /* fixed seed: catalog is stable across runs */
+    const pick = (arr) => arr[Math.floor(rng() * arr.length)];
+    const books = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const sur = pick(SURNAMES), giv = pick(GIVEN);
+      const year = 1830 + Math.floor(rng() * 120);
+      books[i] = {
+        accession: i + 1,
+        call: pick(CLASSES) + " " + sur.slice(0, 3).toUpperCase(),
+        author: sur + ", " + giv + ".",
+        title: pick(FORMS).replace("%", pick(TOPICS)),
+        imprint: "Baltimore : Cushings and Bailey, " + year + ".",
+        seed: Math.floor(rng() * 1e9)
+      };
+    }
+    books.sort((a, b) => CC.authorSortKey(a.author) < CC.authorSortKey(b.author) ? -1 : 1);
+    return books;
+  }
+
+  /* ----------------------------------------------------------------
+   * Virtualized card pool.
+   * Only WINDOW_BEHIND standing cards and WINDOW_AHEAD flipped cards
+   * exist in the DOM at any moment, regardless of drawer size.
+   * Nodes are recycled; content is reassigned as the window moves.
+   * ---------------------------------------------------------------- */
+  const WINDOW_BEHIND = 14;  /* standing cards visible behind the focal card */
+  const WINDOW_AHEAD = 3;    /* flipped cards kept in front before recycling */
+  const POOL_SIZE = WINDOW_BEHIND + WINDOW_AHEAD + 2;
+
+  const drawer = document.getElementById("drawer");
+  const pool = [];
+  for (let i = 0; i < POOL_SIZE; i++) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = '<span class="call"></span><span class="accession"></span>' +
+      '<div class="body"><div class="author"></div><div class="title"></div><div class="imprint"></div></div>' +
+      '<span class="hole"></span>';
+    el.style.display = "none";
+    drawer.appendChild(el);
+    pool.push({ el: el, bookIndex: -1,
+      call: el.querySelector(".call"), acc: el.querySelector(".accession"),
+      author: el.querySelector(".author"), title: el.querySelector(".title"),
+      imprint: el.querySelector(".imprint") });
+  }
+  document.getElementById("nodesOut").textContent = POOL_SIZE;
+
+  function assign(slot, idx) {
+    if (slot.bookIndex === idx) return;
+    slot.bookIndex = idx;
+    const b = books[idx];
+    slot.call.textContent = b.call;
+    slot.acc.textContent = "No. " + b.accession;
+    slot.author.textContent = b.author;
+    slot.title.textContent = b.title;
+    slot.imprint.textContent = b.imprint;
+    /* Seeded per-card variation, same mechanism the real app will use. */
+    const v = CC.cardVariation(b.seed);
+    slot.rot = v.rotateDeg;
+    slot.el.style.opacity = v.inkDensity < 0.9 ? "0.97" : "1";
+  }
+
+  /* ----------------------------------------------------------------
+   * Riffle physics.
+   * pos is a float index into the catalog. Cards at index < pos have
+   * flipped forward past the rod; the card at ceil(pos) is the front
+   * standing card. Velocity decays; release settles to an integer.
+   * ---------------------------------------------------------------- */
+  let books = makeCatalog(1000);
+  let pos = 0, vel = 0, dragging = false, autoRiffle = false;
+  const REST_TILT = -14;      /* standing lean, degrees */
+  const FLIP_TILT = -102;     /* flipped-forward angle */
+  const SPACING_Y = 13;       /* px between standing card bottoms */
+  const SPACING_Z = -22;      /* depth between standing cards */
+  const FRICTION = 0.92;
+  const SETTLE_PULL = 0.16;
+
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function render() {
+    const front = Math.ceil(pos);
+    let slot = 0;
+    for (let k = -WINDOW_AHEAD; k <= WINDOW_BEHIND; k++) {
+      const idx = front + k - 1; /* idx < pos are flipped */
+      const s = pool[slot++];
+      if (idx < 0 || idx >= books.length) { s.el.style.display = "none"; continue; }
+      assign(s, idx);
+      const offset = idx - pos; /* negative: flipped; 0..window: standing */
+      let tilt, y, z, zi;
+      if (offset <= -1) {                 /* fully flipped, resting forward */
+        tilt = FLIP_TILT + s.rot;
+        y = 6; z = 30 + offset * 4; zi = 200 + Math.round(offset);
+      } else if (offset < 0) {            /* mid-flip past the rod */
+        const f = -offset;                /* 0 → 1 as it flips */
+        tilt = REST_TILT + (FLIP_TILT - REST_TILT) * (reducedMotion ? 1 : f) + s.rot;
+        y = f * 6; z = f * 30; zi = 300;
+      } else {                            /* standing in the drawer */
+        tilt = REST_TILT + s.rot;
+        y = -offset * SPACING_Y; z = offset * SPACING_Z; zi = 100 - Math.round(offset);
+      }
+      s.el.style.display = "";
+      s.el.style.zIndex = zi;
+      s.el.style.transform =
+        "translate3d(0," + y.toFixed(2) + "px," + z.toFixed(2) + "px) rotateX(" + tilt.toFixed(2) + "deg)";
+    }
+    document.getElementById("posOut").textContent = Math.min(books.length, front + 1);
+  }
+
+  function tick() {
+    if (!dragging) {
+      if (autoRiffle) {
+        vel = 0.45; /* steady stress speed */
+      } else if (Math.abs(vel) < 0.002) {
+        /* settle to nearest card */
+        const target = Math.max(0, Math.min(books.length - 1, Math.round(pos)));
+        pos += (target - pos) * (reducedMotion ? 1 : SETTLE_PULL);
+        if (Math.abs(target - pos) < 0.001) pos = target;
+        vel = 0;
+      }
+      pos += vel;
+      vel *= FRICTION;
+    }
+    if (pos < 0) { pos = 0; vel = 0; }
+    if (pos > books.length - 1) { pos = books.length - 1; vel = 0; if (autoRiffle) { pos = 0; } }
+    render();
+    meter();
+    requestAnimationFrame(tick);
+  }
+
+  /* ---- Input: pointer drag and wheel ---- */
+  let lastY = 0;
+  drawer.addEventListener("pointerdown", (e) => {
+    dragging = true; autoRiffle = false; lastY = e.clientY; vel = 0;
+    drawer.classList.add("grabbing");
+    drawer.setPointerCapture(e.pointerId);
+  });
+  drawer.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dy = e.clientY - lastY; lastY = e.clientY;
+    pos += dy / 24;            /* drag down riffles forward */
+    vel = dy / 24;
+  });
+  drawer.addEventListener("pointerup", () => { dragging = false; drawer.classList.remove("grabbing"); });
+  drawer.addEventListener("pointercancel", () => { dragging = false; drawer.classList.remove("grabbing"); });
+  addEventListener("wheel", (e) => { autoRiffle = false; vel += e.deltaY / 700; }, { passive: true });
+
+  /* ---- Instrumentation ---- */
+  let frames = [], jank = 0, lastT = performance.now();
+  function meter() {
+    const now = performance.now();
+    const dt = now - lastT; lastT = now;
+    if (dt > 26) jank++; /* frame took more than ~1.5 vsync intervals */
+    frames.push(dt);
+    if (frames.length > 120) frames.shift();
+    if (frames.length >= 30) {
+      const avg = frames.reduce((a, b) => a + b, 0) / frames.length;
+      const sorted = frames.slice().sort((a, b) => b - a);
+      const low1 = sorted[Math.max(0, Math.floor(sorted.length * 0.01))];
+      const fpsEl = document.getElementById("fps");
+      const lowEl = document.getElementById("fpsLow");
+      fpsEl.textContent = Math.round(1000 / avg);
+      lowEl.textContent = Math.round(1000 / low1);
+      fpsEl.className = avg > 18 ? "bad" : "";
+      lowEl.className = low1 > 26 ? "bad" : "";
+      document.getElementById("jank").textContent = jank;
+      document.getElementById("jank").className = jank > 10 ? "bad" : "";
+    }
+  }
+
+  /* ---- Controls ---- */
+  document.getElementById("countSel").addEventListener("change", (e) => {
+    books = makeCatalog(Number(e.target.value));
+    pool.forEach((s) => { s.bookIndex = -1; });
+    pos = 0; vel = 0;
+    document.getElementById("totalOut").textContent = books.length.toLocaleString();
+  });
+  document.getElementById("autoBtn").addEventListener("click", () => { autoRiffle = !autoRiffle; });
+  document.getElementById("resetBtn").addEventListener("click", () => { frames = []; jank = 0; });
+  document.getElementById("totalOut").textContent = books.length.toLocaleString();
+
+  render();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
