@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<!-- CARD CATALOG (FI-066) test harness. Open in a browser; all tests must pass before release. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CARD CATALOG · Test Harness</title>
+<style>
+  body { font-family: "Courier New", Courier, monospace; background: #14100c; color: #e9e2d2; padding: 2rem; }
+  h1 { font-size: 1rem; letter-spacing: 0.3em; }
+  #summary { font-size: 1.1rem; margin: 1rem 0; }
+  #summary.pass { color: #79b894; }
+  #summary.fail { color: #e06c6c; }
+  ul { list-style: none; padding: 0; }
+  li { padding: 0.2rem 0; font-size: 0.85rem; }
+  li.pass::before { content: "PASS  "; color: #79b894; }
+  li.fail::before { content: "FAIL  "; color: #e06c6c; }
+  li.fail .detail { color: #e06c6c; display: block; padding-left: 3rem; }
+</style>
+</head>
+<body>
+<h1>CARD CATALOG · FI-066 · TEST HARNESS</h1>
+<div id="summary">Running...</div>
+<ul id="results"></ul>
+
+<script src="cardcatalog-core.js"></script>
+<script>
+(function () {
+  "use strict";
+  const CC = window.CardCatalog;
+  const results = [];
+
+  function test(name, fn) {
+    try { fn(); results.push({ name, ok: true }); }
+    catch (e) { results.push({ name, ok: false, detail: e.message }); }
+  }
+  function assert(cond, msg) { if (!cond) throw new Error(msg || "assertion failed"); }
+  function assertEq(a, b, msg) {
+    if (JSON.stringify(a) !== JSON.stringify(b)) {
+      throw new Error((msg || "not equal") + " · got " + JSON.stringify(a) + " · want " + JSON.stringify(b));
+    }
+  }
+
+  /* ---- Seeded rendering (spec 4.1, 12) ---- */
+  test("mulberry32: same seed produces identical sequence", () => {
+    const a = CC.mulberry32(88213), b = CC.mulberry32(88213);
+    for (let i = 0; i < 100; i++) assert(a() === b(), "diverged at step " + i);
+  });
+  test("mulberry32: different seeds diverge", () => {
+    const a = CC.mulberry32(1)(), b = CC.mulberry32(2)();
+    assert(a !== b, "seeds 1 and 2 produced the same first value");
+  });
+  test("cardVariation: deterministic and within spec bounds", () => {
+    const v1 = CC.cardVariation(4471), v2 = CC.cardVariation(4471);
+    assertEq(v1, v2, "variation not stable for same seed");
+    assert(Math.abs(v1.rotateDeg) <= 0.8, "rotation out of bounds");
+    assert(v1.inkDensity >= 0.82 && v1.inkDensity <= 1.0, "ink density out of bounds");
+  });
+
+  /* ---- Accession numbers (spec 5.1, 12) ---- */
+  test("allocateAccession: monotonic and never reused", () => {
+    let meta = { nextAccession: 137 };
+    const r1 = CC.allocateAccession(meta);
+    const r2 = CC.allocateAccession(r1.meta);
+    assertEq(r1.accession, 137);
+    assertEq(r2.accession, 138);
+    assertEq(r2.meta.nextAccession, 139);
+    assertEq(meta.nextAccession, 137, "input meta was mutated");
+  });
+
+  /* ---- Subject filing, both-with-override (spec 5.2, 12) ---- */
+  test("effectiveSubjects: OL-only card files under OL headings", () => {
+    const r = CC.effectiveSubjects({ subjectsOL: ["Cabinetwork", "Woodwork"], subjectsUser: [] });
+    assertEq(r, { source: "ol", subjects: ["Cabinetwork", "Woodwork"] });
+  });
+  test("effectiveSubjects: any user subject overrides OL filing", () => {
+    const r = CC.effectiveSubjects({ subjectsOL: ["Cabinetwork"], subjectsUser: ["Fabrication"] });
+    assertEq(r, { source: "user", subjects: ["Fabrication"] });
+  });
+  test("effectiveSubjects: no subjects at all", () => {
+    const r = CC.effectiveSubjects({});
+    assertEq(r, { source: "none", subjects: [] });
+  });
+  test("promoteSubject: adopts an OL heading into user subjects", () => {
+    const book = { subjectsOL: ["Railroads"], subjectsUser: [] };
+    const out = CC.promoteSubject(book, "Railroads");
+    assertEq(out.subjectsUser, ["Railroads"]);
+    assertEq(book.subjectsUser, [], "input book was mutated");
+  });
+  test("promoteSubject: ignores headings not present in OL list", () => {
+    const book = { subjectsOL: ["Railroads"], subjectsUser: [] };
+    const out = CC.promoteSubject(book, "Canals");
+    assertEq(out.subjectsUser, []);
+  });
+  test("removing last user subject reverts filing to OL", () => {
+    const book = { subjectsOL: ["Railroads"], subjectsUser: ["My Shelf"] };
+    const edited = Object.assign({}, book, { subjectsUser: [] });
+    assertEq(CC.effectiveSubjects(edited).source, "ol");
+  });
+
+  /* ---- Filing sort keys (spec 6.1) ---- */
+  test("titleSortKey: ignores leading articles", () => {
+    assertEq(CC.titleSortKey("The Fine Art of Cabinetmaking"), "fine art of cabinetmaking");
+    assertEq(CC.titleSortKey("A Pattern Language"), "pattern language");
+    assertEq(CC.titleSortKey("An Anthology"), "anthology");
+    assertEq(CC.titleSortKey("Theory of Everything"), "theory of everything", "must not strip inside words");
+  });
+
+  /* ---- Circulation date math (spec 12: month and year boundaries) ---- */
+  test("addDays: crosses month boundary", () => {
+    assertEq(CC.addDays("2026-01-25", 10), "2026-02-04");
+  });
+  test("addDays: crosses year boundary", () => {
+    assertEq(CC.addDays("2026-12-20", 21), "2027-01-10");
+  });
+  test("addDays: handles leap day", () => {
+    assertEq(CC.addDays("2028-02-28", 1), "2028-02-29");
+    assertEq(CC.addDays("2026-02-28", 1), "2026-03-01");
+  });
+  test("daysOverdue: zero before and on due date", () => {
+    const loan = { dueDate: "2026-06-22", returnedDate: null };
+    assertEq(CC.daysOverdue(loan, "2026-06-21"), 0);
+    assertEq(CC.daysOverdue(loan, "2026-06-22"), 0);
+  });
+  test("daysOverdue: counts days past due, across month boundary", () => {
+    const loan = { dueDate: "2026-06-22", returnedDate: null };
+    assertEq(CC.daysOverdue(loan, "2026-07-05"), 13);
+  });
+  test("daysOverdue: returned loans are never overdue", () => {
+    const loan = { dueDate: "2026-06-22", returnedDate: "2026-07-01" };
+    assertEq(CC.daysOverdue(loan, "2026-07-05"), 0);
+  });
+  test("activeLoan: finds the unreturned loan", () => {
+    const book = { circulation: [
+      { borrower: "A", returnedDate: "2026-01-01" },
+      { borrower: "B", returnedDate: null }
+    ]};
+    assertEq(CC.activeLoan(book).borrower, "B");
+    assertEq(CC.activeLoan({ circulation: [] }), null);
+  });
+
+  /* ---- Withdrawal: archive, never delete (spec 3.4) ---- */
+  test("withdraw and restore preserve the record", () => {
+    const book = { accession: 12, status: "active", withdrawnDate: null, marginalia: [{ date: "2019-05-01", text: "kept" }] };
+    const w = CC.withdraw(book, "2026-07-05");
+    assertEq(w.status, "withdrawn");
+    assertEq(w.withdrawnDate, "2026-07-05");
+    assertEq(w.marginalia, book.marginalia, "history lost on withdrawal");
+    const r = CC.restore(w);
+    assertEq(r.status, "active");
+    assertEq(r.withdrawnDate, null);
+  });
+
+  /* ---- Export envelope round trip (spec 5.3, 12) ---- */
+  test("buildExport: envelope shape and data round trip", () => {
+    const books = [{ accession: 1, title: "Test", subjectsOL: [], subjectsUser: [], circulation: [], marginalia: [] }];
+    const meta = { nextAccession: 2, customDrawers: [{ label: "RAILROADING" }] };
+    const out = CC.buildExport(meta, books, "2026-07-05T14:30:00Z");
+    assertEq(out.schemaVersion, 1);
+    assertEq(out.fiNumber, "FI-066");
+    assertEq(out.nextAccession, 2);
+    const roundTrip = JSON.parse(JSON.stringify(out));
+    assertEq(roundTrip.books, books, "books did not survive round trip");
+  });
+
+  /* ---- Render ---- */
+  const ul = document.getElementById("results");
+  let passed = 0;
+  results.forEach((r) => {
+    const li = document.createElement("li");
+    li.className = r.ok ? "pass" : "fail";
+    li.textContent = r.name;
+    if (!r.ok) {
+      const d = document.createElement("span");
+      d.className = "detail";
+      d.textContent = r.detail;
+      li.appendChild(d);
+    }
+    if (r.ok) passed++;
+    ul.appendChild(li);
+  });
+  const summary = document.getElementById("summary");
+  const allPass = passed === results.length;
+  summary.textContent = passed + " / " + results.length + " tests passed" + (allPass ? "" : " · RELEASE BLOCKED");
+  summary.className = allPass ? "pass" : "fail";
+})();
+</script>
+</body>
+</html>
