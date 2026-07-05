@@ -8,14 +8,15 @@ Part of the Field Instruments series at [mbparks.com](https://mbparks.com).
 
 ## Status
 
-**v0.1.0 scaffold.** The cabinet shell stands: night-default theming (with day and High Contrast), collapsible side menu, mute control, version display, export envelope, and the drawer front-door view. Drawers are empty. Intake, cards, marginalia, and circulation arrive next per the spec.
+**v0.2.0.** The catalog is usable: books can be accessioned (ISBN lookup via Open Library with the typed-card fill, or hand-typing), filed into AUTHOR, TITLE, and SUBJECT drawers with both-with-override subject filing, browsed with the virtualized riffle promoted from the prototype, lifted out to a card detail view, and annotated with dated marginalia on the card back. The catalog persists in IndexedDB with working JSON export and import (replace or merge with accession conflict reporting). First sounds (typewriter keystrikes and the accession thunk) sit behind the mute control. Circulation, batch intake, and withdrawal arrive in v0.3.
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `index.html` | The instrument. Open it in a browser. No build step, no server. |
-| `cardcatalog-core.js` | Pure logic module (seeded rendering, accessions, subject filing, circulation date math, export envelope). Shared by the app and the test harness. |
+| `cardcatalog-core.js` | Pure logic module (seeded rendering, accessions, subject filing, Open Library parsing, drawer building, circulation date math, export envelope). Shared by the app and the test harness. |
+| `cardcatalog-store.js` | IndexedDB persistence (books and meta stores, import with replace or merge). |
 | `tests.html` | Browser-runnable test harness. All tests must pass before any release. |
 | `SPEC.md` | Full specification document, revision 1. |
 | `prototypes/riffle.html` | Riffle interaction prototype with DOM virtualization and FPS instrumentation. Open in a browser and drag. |
@@ -43,11 +44,13 @@ Local-first. The full catalog exports to a single JSON file you own. External de
 
 ## Known Limitations
 
-- v0.1.0 is a shell. No cards can be cataloged yet; drawers open to an empty state.
-- Import is a stub; the storage layer (IndexedDB vs. localStorage decision pending) arrives in v0.2.
-- Typewriter and pencil typefaces currently fall back to system stacks. Font subsetting and embedding is planned for v1.0.
-- No sounds are implemented yet; the mute control ships ahead of the audio it governs.
-- The riffle-browse interaction, identified in the spec as the number one performance risk, now has a prototype at `prototypes/riffle.html` with built-in FPS, 1% low, and long-frame counters. It virtualizes to a fixed pool of 19 DOM nodes regardless of drawer size (tested up to 20,000 synthetic cards). Verify the numbers on your own hardware, especially a phone, before the technique is promoted into the shell.
+- No circulation yet: lending, borrower cards, due-date stamps, and the circulation desk arrive in v0.3, as do batch ISBN intake and the WITHDRAWN workflow (the drawer exists but nothing can be filed into it yet).
+- Cards cannot be edited after filing. Correct mistakes by exporting, editing the JSON, and importing in replace mode, or wait for the edit affordance.
+- Marginalia entries cannot be edited or removed once penciled in (archive-not-delete will eventually offer strikethrough rather than erasure).
+- Import mode selection uses plain browser dialogs. Functional but not diegetic; a proper accessions-desk treatment is planned.
+- Cover thumbnails load from Open Library URLs live in the detail view only (never during a riffle, for performance). No local caching yet; a missing cover is a valid state.
+- Typewriter and pencil typefaces fall back to system stacks. Font subsetting and embedding is planned for v1.0.
+- The riffle technique from `prototypes/riffle.html` is now in the shell. The prototype remains for hardware benchmarking; verify frame numbers on a phone if riffling feels rough.
 - The feedback link points at the GitHub issues page; an in-app feedback mechanism is required before v1.0.
 
 ## License

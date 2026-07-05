@@ -12,7 +12,7 @@
 
   const CC = {};
 
-  CC.APP_VERSION = "0.1.0";
+  CC.APP_VERSION = "0.2.0";
   CC.SCHEMA_VERSION = 1;
   CC.INSTRUMENT = "CARD CATALOG";
   CC.FI_NUMBER = "FI-066";
@@ -144,6 +144,110 @@
       exportedAt: nowIso,
       books: books
     };
+  };
+
+  /* ---------------------------------------------------------------
+   * Book construction and Open Library parsing (spec 6.4, 7).
+   * --------------------------------------------------------------- */
+
+  /* "Roald Dahl" -> "Dahl, Roald." Handles generational suffixes. */
+  const SUFFIXES = ["jr", "jr.", "sr", "sr.", "ii", "iii", "iv"];
+  CC.surnameFirst = function (name) {
+    const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "";
+    if (parts.length === 1) return parts[0] + ".";
+    let suffix = "";
+    if (SUFFIXES.includes(parts[parts.length - 1].toLowerCase()) && parts.length > 2) {
+      suffix = " " + parts.pop();
+    }
+    const surname = parts.pop();
+    const line = surname + ", " + parts.join(" ") + suffix;
+    return line.endsWith(".") ? line : line + ".";
+  };
+
+  /* Map an Open Library jscmd=data record onto card fields.
+   * Missing pieces use bracketed cataloger's conventions:
+   * [s.l.] no place, [s.n.] no publisher, [n.d.] no date. */
+  CC.parseOLBook = function (ol, isbn) {
+    ol = ol || {};
+    const authors = (ol.authors || []).map((a) => a.name).filter(Boolean);
+    const authorLine = authors.length ? CC.surnameFirst(authors[0]) : "";
+    const titleCore = (ol.title || "") + (ol.subtitle ? " : " + ol.subtitle : "");
+    const titleLine = titleCore
+      ? titleCore + (authors.length ? " / " + authors.join(", ") + "." : ".")
+      : "";
+    const place = ol.publish_places && ol.publish_places[0] ? ol.publish_places[0].name : "[s.l.]";
+    const publisher = ol.publishers && ol.publishers[0] ? ol.publishers[0].name : "[s.n.]";
+    const date = ol.publish_date || "[n.d.]";
+    return {
+      isbn: isbn || null,
+      author: authorLine,
+      title: titleLine,
+      imprint: place + " : " + publisher + ", " + date + ".",
+      physDesc: ol.number_of_pages ? ol.number_of_pages + " p." : "1 v.",
+      subjectsOL: (ol.subjects || []).map((s) => s.name).filter(Boolean).slice(0, 8),
+      coverUrl: ol.cover ? (ol.cover.medium || ol.cover.small || null) : null
+    };
+  };
+
+  /* Construct a complete book record from partial fields (spec 5.1). */
+  CC.makeBook = function (fields, accession, seed) {
+    return Object.assign({
+      accession: accession,
+      status: "active",
+      isbn: null,
+      callNumber: "",
+      author: "",
+      title: "",
+      imprint: "",
+      physDesc: "",
+      subjectsOL: [],
+      subjectsUser: [],
+      coverUrl: null,
+      seed: seed,
+      addedDate: null,
+      withdrawnDate: null,
+      marginalia: [],
+      circulation: []
+    }, fields, { accession: accession, seed: seed });
+  };
+
+  /* ---------------------------------------------------------------
+   * Drawer building (spec 6.1).
+   * Returns the ordered card list for a named drawer.
+   * --------------------------------------------------------------- */
+  CC.buildDrawer = function (books, drawerName) {
+    const active = books.filter((b) => b.status === "active");
+    switch (drawerName) {
+      case "AUTHOR":
+        return active.slice().sort((a, b) =>
+          CC.authorSortKey(a.author).localeCompare(CC.authorSortKey(b.author)));
+      case "TITLE":
+        return active.slice().sort((a, b) =>
+          CC.titleSortKey(a.title).localeCompare(CC.titleSortKey(b.title)));
+      case "SUBJECT":
+        return active.slice().sort((a, b) => {
+          const sa = (CC.effectiveSubjects(a).subjects[0] || "\uffff").toLowerCase();
+          const sb = (CC.effectiveSubjects(b).subjects[0] || "\uffff").toLowerCase();
+          return sa.localeCompare(sb) ||
+            CC.authorSortKey(a.author).localeCompare(CC.authorSortKey(b.author));
+        });
+      case "WITHDRAWN":
+        return books.filter((b) => b.status === "withdrawn").slice().sort((a, b) =>
+          CC.authorSortKey(a.author).localeCompare(CC.authorSortKey(b.author)));
+      default:
+        return active.slice();
+    }
+  };
+
+  /* Numbered tracings for the card foot: user subjects first, then OL. */
+  CC.tracings = function (book) {
+    const user = (book.subjectsUser || []).map((s) => ({ heading: s, source: "user" }));
+    const seen = new Set((book.subjectsUser || []).map((s) => s.toLowerCase()));
+    const ol = (book.subjectsOL || [])
+      .filter((s) => !seen.has(s.toLowerCase()))
+      .map((s) => ({ heading: s, source: "ol" }));
+    return user.concat(ol).map((t, i) => Object.assign({ n: i + 1 }, t));
   };
 
   /* ---------------------------------------------------------------

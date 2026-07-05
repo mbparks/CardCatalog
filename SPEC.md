@@ -1,6 +1,6 @@
 # CARD CATALOG
 ## Field Instrument No. 066 — Specification Document
-**Revision 1 — Draft for review**
+**Revision 2**
 **Author:** M.B. Parks
 **Status:** Pre-development, v1.0 scope locked
 
@@ -147,7 +147,7 @@ All data local-first, persisted to browser storage, with full-catalog JSON expor
 
 ### 5.4 Storage and migration
 
-- Primary persistence: localStorage or IndexedDB (IndexedDB preferred for catalog scale; decide during build, document the choice in README).
+- Primary persistence: IndexedDB (decided at v0.2). Chosen over localStorage for catalog scale: structured records instead of one serialized string, no 5MB ceiling, and async writes that never block a riffle frame. Object stores: "books" (keyPath accession) and "meta".
 - `schemaVersion` present from v1.0. No backwards compatibility maintained until requested, per standards, but the version field exists so future migration is possible.
 - Export produces a single JSON file: metadata plus full book array. Import replaces or merges (user chooses; merge matches on accession number and warns on conflicts).
 
@@ -289,6 +289,7 @@ Minimum test coverage:
 | Subject filing | Both-with-override: OL headings auto-file, user subjects take precedence | 2026-07-05 |
 | FI number | FI-066 | 2026-07-05 |
 | v1.0 scope | Cards, cabinet, intake, marginalia, lending; Reading Room deferred to v1.x | 2026-07-05 |
+| Storage layer | IndexedDB (books + meta object stores); localStorage retained only for UI preferences | 2026-07-05 |
 
 ---
 

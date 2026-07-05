@@ -24,6 +24,7 @@
 <ul id="results"></ul>
 
 <script src="cardcatalog-core.js"></script>
+<script src="cardcatalog-store.js"></script>
 <script>
 (function () {
   "use strict";
@@ -163,26 +164,135 @@
     assertEq(roundTrip.books, books, "books did not survive round trip");
   });
 
-  /* ---- Render ---- */
-  const ul = document.getElementById("results");
-  let passed = 0;
-  results.forEach((r) => {
-    const li = document.createElement("li");
-    li.className = r.ok ? "pass" : "fail";
-    li.textContent = r.name;
-    if (!r.ok) {
-      const d = document.createElement("span");
-      d.className = "detail";
-      d.textContent = r.detail;
-      li.appendChild(d);
-    }
-    if (r.ok) passed++;
-    ul.appendChild(li);
+  /* ---- v0.2: name inversion and Open Library parsing (spec 6.4) ---- */
+  test("surnameFirst: inverts and punctuates", () => {
+    assertEq(CC.surnameFirst("James Krenov"), "Krenov, James.");
+    assertEq(CC.surnameFirst("Sammy Davis Jr."), "Davis, Sammy Jr.");
+    assertEq(CC.surnameFirst("Henry Latrobe II"), "Latrobe, Henry II.");
+    assertEq(CC.surnameFirst("Plato"), "Plato.");
   });
-  const summary = document.getElementById("summary");
-  const allPass = passed === results.length;
-  summary.textContent = passed + " / " + results.length + " tests passed" + (allPass ? "" : " · RELEASE BLOCKED");
-  summary.className = allPass ? "pass" : "fail";
+  test("parseOLBook: maps a full record onto card fields", () => {
+    const parsed = CC.parseOLBook({
+      title: "The Fine Art of Cabinetmaking", authors: [{ name: "James Krenov" }],
+      publish_date: "1977", publishers: [{ name: "Van Nostrand Reinhold" }],
+      publish_places: [{ name: "New York" }], number_of_pages: 192,
+      subjects: [{ name: "Cabinetwork" }, { name: "Woodwork" }],
+      cover: { small: "s.jpg", medium: "m.jpg" }
+    }, "9780442245573");
+    assertEq(parsed.author, "Krenov, James.");
+    assertEq(parsed.title, "The Fine Art of Cabinetmaking / James Krenov.");
+    assertEq(parsed.imprint, "New York : Van Nostrand Reinhold, 1977.");
+    assertEq(parsed.physDesc, "192 p.");
+    assertEq(parsed.subjectsOL, ["Cabinetwork", "Woodwork"]);
+    assertEq(parsed.coverUrl, "m.jpg");
+  });
+  test("parseOLBook: sparse record falls back to cataloger conventions", () => {
+    const sparse = CC.parseOLBook({ title: "Old Pamphlet" }, null);
+    assertEq(sparse.imprint, "[s.l.] : [s.n.], [n.d.].");
+    assertEq(sparse.physDesc, "1 v.");
+    assertEq(sparse.title, "Old Pamphlet.");
+  });
+
+  /* ---- v0.2: book construction and drawers (spec 5.1, 6.1) ---- */
+  test("makeBook: defaults plus identity fields", () => {
+    const bk = CC.makeBook({ author: "Krenov, James." }, 7, 12345);
+    assertEq(bk.accession, 7);
+    assertEq(bk.seed, 12345);
+    assertEq(bk.status, "active");
+    assertEq(bk.subjectsUser, []);
+    assertEq(bk.circulation, []);
+    assertEq(bk.marginalia, []);
+  });
+  test("buildDrawer: AUTHOR, TITLE, SUBJECT, WITHDRAWN orderings", () => {
+    const set = [
+      CC.makeBook({ author: "Zeta, A.", title: "The Alpha Book", subjectsOL: ["Woodwork"] }, 1, 1),
+      CC.makeBook({ author: "Alpha, Z.", title: "Zulu Manual", subjectsOL: ["Canals"], subjectsUser: ["Railroads"] }, 2, 2),
+      Object.assign(CC.makeBook({ author: "Mid, M.", title: "Gone" }, 3, 3), { status: "withdrawn" })
+    ];
+    assertEq(CC.buildDrawer(set, "AUTHOR").map((b) => b.accession), [2, 1]);
+    assertEq(CC.buildDrawer(set, "TITLE").map((b) => b.accession), [1, 2], "leading article must be ignored");
+    assertEq(CC.buildDrawer(set, "SUBJECT").map((b) => b.accession), [2, 1], "user subject must drive filing");
+    assertEq(CC.buildDrawer(set, "WITHDRAWN").map((b) => b.accession), [3]);
+  });
+  test("tracings: user first, OL deduped case-insensitively", () => {
+    const tr = CC.tracings({ subjectsUser: ["Railroads"], subjectsOL: ["railroads", "Canals"] });
+    assertEq(tr, [{ n: 1, heading: "Railroads", source: "user" }, { n: 2, heading: "Canals", source: "ol" }]);
+  });
+
+  /* ---- v0.2: IndexedDB store (async, spec 5.4) ---- */
+  async function runAsyncTests() {
+    async function atest(name, fn) {
+      try { await fn(); results.push({ name, ok: true }); }
+      catch (e) { results.push({ name, ok: false, detail: e.message }); }
+    }
+    const Store = window.CardCatalogStore;
+
+    await atest("store: book and meta round trip", async () => {
+      await Store._reset();
+      let meta = await Store.getMeta();
+      assertEq(meta.nextAccession, 1);
+      const alloc = CC.allocateAccession(meta);
+      await Store.putBook(CC.makeBook({ author: "Krenov, James.", title: "Cabinets." }, alloc.accession, 999));
+      await Store.putMeta(alloc.meta);
+      const all = await Store.getAllBooks();
+      assertEq(all.length, 1);
+      assertEq(all[0].author, "Krenov, James.");
+      assertEq((await Store.getMeta()).nextAccession, 2);
+    });
+
+    await atest("store: merge import skips accession conflicts and lifts nextAccession", async () => {
+      const payload = CC.buildExport({ nextAccession: 5, customDrawers: [] }, [
+        CC.makeBook({ title: "Dupe." }, 1, 1),
+        CC.makeBook({ title: "New Arrival." }, 4, 4)
+      ], "2026-07-05T00:00:00Z");
+      const merge = await Store.importCatalog(payload, "merge");
+      assertEq([merge.imported, merge.skipped, merge.conflicts], [1, 1, [1]]);
+      assertEq((await Store.getAllBooks()).length, 2);
+      assertEq((await Store.getMeta()).nextAccession, 5);
+    });
+
+    await atest("store: replace import wipes and reloads", async () => {
+      const payload = CC.buildExport({ nextAccession: 9, customDrawers: [] }, [
+        CC.makeBook({ title: "Only One." }, 8, 8)
+      ], "2026-07-05T00:00:00Z");
+      const rep = await Store.importCatalog(payload, "replace");
+      assertEq(rep.imported, 1);
+      assertEq((await Store.getAllBooks()).length, 1);
+      assertEq((await Store.getMeta()).nextAccession, 9);
+    });
+
+    await atest("store: rejects foreign JSON", async () => {
+      let threw = false;
+      try { await Store.importCatalog({ foo: "bar" }, "merge"); } catch (e) { threw = true; }
+      assert(threw, "foreign JSON accepted");
+    });
+
+    await Store._reset(); /* leave no test data behind */
+  }
+
+  /* ---- Render ---- */
+  function renderResults() {
+    const ul = document.getElementById("results");
+    let passed = 0;
+    results.forEach((r) => {
+      const li = document.createElement("li");
+      li.className = r.ok ? "pass" : "fail";
+      li.textContent = r.name;
+      if (!r.ok) {
+        const d = document.createElement("span");
+        d.className = "detail";
+        d.textContent = r.detail;
+        li.appendChild(d);
+      }
+      if (r.ok) passed++;
+      ul.appendChild(li);
+    });
+    const summary = document.getElementById("summary");
+    const allPass = passed === results.length;
+    summary.textContent = passed + " / " + results.length + " tests passed" + (allPass ? "" : " · RELEASE BLOCKED");
+    summary.className = allPass ? "pass" : "fail";
+  }
+  runAsyncTests().then(renderResults);
 })();
 </script>
 </body>
